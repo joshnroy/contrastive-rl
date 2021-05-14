@@ -1,0 +1,8 @@
+*.pyc
+*.pt
+*.csv
+*.log
+latest-run
+wandb/
+
+__pycache__/
