@@ -142,6 +142,80 @@ class Policy(nn.Module):
 
         return value, action_log_probs, dist_entropy, rnn_hxs
 
+class projection_MLP(nn.Module):
+    def __init__(self, in_dim, hidden_dim=2048, out_dim=2048):
+        super().__init__()
+        ''' page 3 baseline setting
+        Projection MLP. The projection MLP (in f) has BN ap-
+        plied to each fully-connected (fc) layer, including its out- 
+        put fc. Its output fc has no ReLU. The hidden fc is 2048-d. 
+        This MLP has 3 layers.
+        '''
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.layer1 = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(inplace=True)
+        )
+        self.layer2 = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(inplace=True)
+        )
+        self.layer3 = nn.Sequential(
+            nn.Linear(hidden_dim, out_dim),
+            nn.BatchNorm1d(hidden_dim)
+        )
+        self.num_layers = 2
+    def set_layers(self, num_layers):
+        self.num_layers = num_layers
+
+    def forward(self, x):
+        if self.num_layers == 3:
+            x = self.layer1(x)
+            x = self.layer2(x)
+            x = self.layer3(x)
+        elif self.num_layers == 2:
+            x = self.layer1(x)
+            x = self.layer3(x)
+        else:
+            raise Exception
+        return x 
+
+class BarlowPolicy(Policy):
+    def __init__(self, obs_shape, num_actions, base_kwargs=None):
+        super(BarlowPolicy, self).__init__(obs_shape, num_actions, base_kwargs=base_kwargs)
+
+        self.lambd = 5e-3
+
+
+        self.projector = projection_MLP(in_dim=base_kwargs['hidden_size'])
+        self.bn = nn.BatchNorm1d(self.projector.out_dim, affine=False)
+
+    def generate_cross_correlation_matrix(self, obs1, obs2, rxx_hxs, masks) -> np.ndarray:
+        f = lambda x: self.projector(self.base(x, rxx_hxs, masks)[1])
+        z1, z2 = f(obs1), f(obs2)
+
+        c = self.bn(z1).T @ self.bn(z2)
+        c.div_(obs1.shape[0]) # Divide by batch size
+
+        return c
+
+    def calc_barlow_loss(self, obs1, obs2, rxx_hxs, masks):
+        c = self.generate_cross_correlation_matrix(obs1, obs2, rxx_hxs, masks)
+
+        on_diag = torch.diagonal(c).add_(-1).pow(2).sum()
+        off_diag = self.off_diagonal(c).pow_(2).sum()
+        L = on_diag + self.lambd * off_diag
+
+        return L
+
+    def off_diagonal(self, x):
+        n, m = x.shape
+        assert n == m
+        return x.flatten()[:-1].view(n-1, n+1)[:, 1:].flatten()
+
 
 class NNBase(nn.Module):
     """

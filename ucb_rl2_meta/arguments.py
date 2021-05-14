@@ -36,6 +36,11 @@ parser.add_argument(
     default=0.01,
     help='entropy term coefficient')
 parser.add_argument(
+    '--barlow_coef',
+    type=float,
+    default=0.01,
+    help='barlow term coefficient')
+parser.add_argument(
     '--value_loss_coef',
     type=float,
     default=0.5,
@@ -68,7 +73,7 @@ parser.add_argument(
 parser.add_argument(
     '--num_mini_batch',
     type=int,
-    default=8,
+    default=16,
     help='number of batches for ppo')
 parser.add_argument(
     '--clip_param',
@@ -236,3 +241,9 @@ parser.add_argument(
     type=float,
     default=0.10, 
     help='fraction of the PPO buffer used for test by the meta-learner.')
+parser.add_argument('--wandb', action='store_true')
+parser.add_argument(
+    '--group_name',
+    type=str,
+    default='debug',
+    help='name of the wandb.ai group')

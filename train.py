@@ -2,12 +2,14 @@ import copy
 import os
 import time
 from collections import deque
+import wandb
+import pandas as pd
 
 import numpy as np
 import torch
 
 from ucb_rl2_meta import algo, utils
-from ucb_rl2_meta.model import Policy, AugCNN
+from ucb_rl2_meta.model import Policy, AugCNN, BarlowPolicy
 from ucb_rl2_meta.storage import RolloutStorage
 from test import evaluate
 
@@ -15,6 +17,7 @@ from baselines import logger
 
 from procgen import ProcgenEnv
 from baselines.common.vec_env import (
+    SubprocVecEnv,
     VecExtractDictObs,
     VecMonitor,
     VecNormalize
@@ -22,6 +25,8 @@ from baselines.common.vec_env import (
 from ucb_rl2_meta.envs import VecPyTorchProcgen, TransposeImageProcgen
 from ucb_rl2_meta.arguments import parser
 import data_augs
+import gym
+from pyvirtualdisplay import Display
 
 aug_to_func = {    
         'crop': data_augs.Crop,
@@ -56,8 +61,9 @@ def train(args):
     venv = VecNormalize(venv=venv, ob=False)
     envs = VecPyTorchProcgen(venv, device)
     
+    
     obs_shape = envs.observation_space.shape
-    actor_critic = Policy(
+    actor_critic = BarlowPolicy(
         obs_shape,
         envs.action_space.n,
         base_kwargs={'recurrent': False, 'hidden_size': args.hidden_size})        
@@ -168,7 +174,8 @@ def train(args):
             aug_id=aug_id,
             aug_func=aug_func,
             aug_coef=args.aug_coef,
-            env_name=args.env_name)
+            env_name=args.env_name,
+            barlow_coef=args.barlow_coef)
 
     checkpoint_path = os.path.join(args.save_dir, "agent" + log_file + ".pt")
     if os.path.exists(checkpoint_path) and args.preempt:
@@ -226,7 +233,7 @@ def train(args):
 
         if args.use_ucb and j > 0:
             agent.update_ucb_values(rollouts)
-        value_loss, action_loss, dist_entropy = agent.update(rollouts)    
+        value_loss, action_loss, dist_entropy, barlow_loss = agent.update(rollouts)    
         rollouts.after_update()
 
         # save for every interval-th episode or for the last epoch
@@ -245,6 +252,7 @@ def train(args):
             logger.logkv("losses/dist_entropy", dist_entropy)
             logger.logkv("losses/value_loss", value_loss)
             logger.logkv("losses/action_loss", action_loss)
+            logger.logkv("losses/barlow_loss", barlow_loss)
 
             logger.logkv("train/mean_episode_reward", np.mean(episode_rewards))
             logger.logkv("train/median_episode_reward", np.median(episode_rewards))
@@ -255,7 +263,9 @@ def train(args):
             logger.logkv("test/mean_episode_reward", np.mean(eval_episode_rewards))
             logger.logkv("test/median_episode_reward", np.median(eval_episode_rewards))
 
-            logger.dumpkvs()
+            epoch_dict = logger.dumpkvs()
+            if args.wandb:
+                wandb.log(epoch_dict)
 
         # Save Model
         if (j > 0 and j % args.save_interval == 0
@@ -272,5 +282,11 @@ def train(args):
             }, os.path.join(args.save_dir, "agent" + log_file + ".pt")) 
 
 if __name__ == "__main__":
+    display = Display(visible=0, size=(1000, 1000))
+    display.start()
     args = parser.parse_args()
+    if args.wandb:
+        wandb_config = pd.json_normalize(vars(args), sep='_')
+        wandb_config = wandb_config.to_dict(orient='records')[0]
+        wandb.init(project='contrastive_rl', config=wandb_config, group=args.group_name)
     train(args)

@@ -21,7 +21,8 @@ class DrAC():
                  aug_id=None,
                  aug_func=None,
                  aug_coef=0.1,
-                 env_name=None):
+                 env_name=None,
+                 barlow_coef=0.01):
 
         self.actor_critic = actor_critic
 
@@ -40,6 +41,8 @@ class DrAC():
         self.aug_func = aug_func
         self.aug_coef = aug_coef
 
+        self.barlow_coef = barlow_coef
+
         self.env_name = env_name
 
     def update(self, rollouts):
@@ -50,6 +53,7 @@ class DrAC():
         value_loss_epoch = 0
         action_loss_epoch = 0
         dist_entropy_epoch = 0
+        barlow_loss_epoch = 0
 
         for e in range(self.ppo_epoch):
             if self.actor_critic.is_recurrent:
@@ -95,12 +99,16 @@ class DrAC():
                 action_loss_aug = - action_log_probs_aug.mean()
                 value_loss_aug = .5 * (torch.detach(values) - values_aug).pow(2).mean()
 
+                # Compute Barlow Loss
+                barlow_loss = self.actor_critic.calc_barlow_loss(obs_batch, obs_batch_aug, recurrent_hidden_states_batch, masks_batch)
+
                 # Update actor-critic using both PPO and Augmented Loss
                 self.optimizer.zero_grad()
                 aug_loss = value_loss_aug + action_loss_aug
-                (value_loss * self.value_loss_coef + action_loss -
-                    dist_entropy * self.entropy_coef + 
-                    aug_loss * self.aug_coef).backward()
+                ppo_loss = (value_loss * self.value_loss_coef + action_loss -
+                    dist_entropy * self.entropy_coef)
+                loss = ppo_loss + aug_loss * self.aug_coef + barlow_loss * self.barlow_coef
+                loss.backward()
                 nn.utils.clip_grad_norm_(self.actor_critic.parameters(),
                                         self.max_grad_norm)
                 self.optimizer.step()  
@@ -108,6 +116,7 @@ class DrAC():
                 value_loss_epoch += value_loss.item()
                 action_loss_epoch += action_loss.item()
                 dist_entropy_epoch += dist_entropy.item()
+                barlow_loss_epoch += barlow_loss.item()
 
                 if self.aug_func:
                     self.aug_func.change_randomization_params_all()
@@ -117,5 +126,6 @@ class DrAC():
         value_loss_epoch /= num_updates
         action_loss_epoch /= num_updates
         dist_entropy_epoch /= num_updates
+        barlow_loss_epoch /= num_updates
 
-        return value_loss_epoch, action_loss_epoch, dist_entropy_epoch
+        return value_loss_epoch, action_loss_epoch, dist_entropy_epoch, barlow_loss_epoch
